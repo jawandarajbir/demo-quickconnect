@@ -120,7 +120,7 @@ body {
 }
 
 .r-all--4of11 {
-  width: 36.36364;
+  width: 36.36364%;
 }
 
 .r-all--3of8 {
@@ -158,11 +158,11 @@ body {
 }
 
 .r-all--6of11 {
-  width: 54.54545;
+  width: 54.54545%;
 }
 
 .r-all--5of9 {
-  width: calc(1 5 / 9);
+  width: 55.55556%;
 }
 
 .r-all--4of7 {
@@ -230,7 +230,7 @@ body {
 }
 
 .r-all--6of7 {
-  width: calc(1 6 / 7);
+  width: 85.71429%;
 }
 
 .r-all--7of8 {
