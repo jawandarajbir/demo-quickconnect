@@ -9,9 +9,9 @@
     "fdom": "^1.2.0",
     "freeice": "^2.2.0",
     "kgo": "^4.0.1",
-    "rtc-attach": "^2.0.1",
-    "rtc-capture": "^1.0.2",
-    "rtc-quickconnect": "^5.4.0"
+    "rtc-attach": "2.0.1",
+    "rtc-capture": "1.0.2",
+    "rtc-quickconnect": "5.6.1"
   },
   "scripts": {
     "new-chrome": "google-chrome --user-data-dir=$HOME/.config/chrome-test --use-fake-device-for-media-stream http://localhost:3000 &",
