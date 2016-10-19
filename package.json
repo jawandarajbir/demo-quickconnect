@@ -12,7 +12,6 @@
     "kgo": "^4.0.1",
     "rtc-attach": "2.0.1",
     "rtc-capture": "1.0.2",
-    "rtc-quickconnect": "5.6.1",
     "utf-8-validate": "^1.2.1"
   },
   "scripts": {
@@ -44,6 +43,7 @@
     "cssrecipes-defaults": "^0.5.0",
     "cssrecipes-grid": "^1.0.0",
     "cssrecipes-utils": "^0.6.0",
+    "rtc-quickconnect": "git+https://github.com/rtc-io/rtc-quickconnect.git#garbage-collection-improvements",
     "rtc-tools": "git+https://github.com/rtc-io/rtc-tools.git#garbage-collection-improvements"
   }
 }
