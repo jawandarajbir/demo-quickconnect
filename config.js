@@ -1,5 +1,5 @@
 // configure the switchboard address
-exports.switchboard = 'https://aa-test-rtc-switchboard.azurewebsites.net';
+exports.switchboard = 'https://aa-test-rtc-switchboard-demo.azurewebsites.net';
 
 // initialise constraints that will be used for local media capture
 exports.constraints = { video: true, audio: true };
