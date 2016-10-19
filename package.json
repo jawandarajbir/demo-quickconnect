@@ -43,7 +43,6 @@
     "cssrecipes-defaults": "^0.5.0",
     "cssrecipes-grid": "^1.0.0",
     "cssrecipes-utils": "^0.6.0",
-    "rtc-quickconnect": "git+https://github.com/rtc-io/rtc-quickconnect.git#garbage-collection-improvements",
-    "rtc-tools": "git+https://github.com/rtc-io/rtc-tools.git#garbage-collection-improvements"
+    "rtc-quickconnect": "git+https://github.com/rtc-io/rtc-quickconnect.git#garbage-collection-improvements"
   }
 }

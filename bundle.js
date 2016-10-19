@@ -31688,7 +31688,7 @@ module.exports = function(opts) {
   return signaller;
 };
 
-},{"rtc-signaller":211,"rtc-switchboard-messenger":212}],193:[function(require,module,exports){
+},{"rtc-signaller":205,"rtc-switchboard-messenger":206}],193:[function(require,module,exports){
 (function (process){
 /* jshint node: true */
 /* global location */
@@ -32627,7 +32627,7 @@ module.exports = function(signalhost, opts) {
 };
 
 }).call(this,require('_process'))
-},{"./lib/calls":194,"./lib/getpeerdata":195,"./lib/schemes":197,"_process":156,"cog/extend":65,"mbus":130,"rtc-core/genice":190,"rtc-core/plugin":191,"rtc-pluggable-signaller":192,"rtc-tools":202}],194:[function(require,module,exports){
+},{"./lib/calls":194,"./lib/getpeerdata":195,"./lib/schemes":197,"_process":156,"cog/extend":65,"mbus":130,"rtc-core/genice":190,"rtc-core/plugin":191,"rtc-pluggable-signaller":192,"rtc-tools":213}],194:[function(require,module,exports){
 (function (process){
 var rtc = require('rtc-tools');
 var debug = rtc.logger('rtc-quickconnect');
@@ -32861,7 +32861,7 @@ module.exports = function(signaller, opts) {
 };
 
 }).call(this,require('_process'))
-},{"./getpeerdata":195,"./heartbeat":196,"_process":156,"cog/getable":66,"rtc-tools":202,"rtc-tools/cleanup":198}],195:[function(require,module,exports){
+},{"./getpeerdata":195,"./heartbeat":196,"_process":156,"cog/getable":66,"rtc-tools":213,"rtc-tools/cleanup":209}],195:[function(require,module,exports){
 module.exports = function(peers) {
   return function(id) {
     var peer = peers.get(id);
@@ -33030,863 +33030,7 @@ module.exports = function(signaller, opts) {
     get: get
   };
 };
-},{"rtc-tools":202}],198:[function(require,module,exports){
-/* jshint node: true */
-'use strict';
-
-var debug = require('cog/logger')('rtc/cleanup');
-
-var CANNOT_CLOSE_STATES = [
-  'closed'
-];
-
-var EVENTS_DECOUPLE_BC = [
-  'addstream',
-  'datachannel',
-  'icecandidate',
-  'negotiationneeded',
-  'removestream',
-  'signalingstatechange'
-];
-
-var EVENTS_DECOUPLE_AC = [
-  'iceconnectionstatechange'
-];
-
-/**
-  ### rtc-tools/cleanup
-
-  ```
-  cleanup(pc)
-  ```
-
-  The `cleanup` function is used to ensure that a peer connection is properly
-  closed and ready to be cleaned up by the browser.
-
-**/
-module.exports = function(pc) {
-  if (!pc) return;
-
-  // see if we can close the connection
-  var currentState = pc.iceConnectionState;
-  var currentSignaling = pc.signalingState;
-  var canClose = CANNOT_CLOSE_STATES.indexOf(currentState) < 0 && CANNOT_CLOSE_STATES.indexOf(currentSignaling) < 0;
-
-  function decouple(events) {
-    events.forEach(function(evtName) {
-      if (pc['on' + evtName]) {
-        pc['on' + evtName] = null;
-      }
-    });
-  }
-
-  // decouple "before close" events
-  decouple(EVENTS_DECOUPLE_BC);
-
-  if (canClose) {
-    debug('attempting connection close, current state: '+ pc.iceConnectionState);
-    try {
-      pc.close();
-    } catch (e) {
-      console.warn('Could not close connection', e);
-    }
-  }
-
-  // remove the event listeners
-  // after a short delay giving the connection time to trigger
-  // close and iceconnectionstatechange events
-  setTimeout(function() {
-    decouple(EVENTS_DECOUPLE_AC);
-  }, 100);
-};
-
-},{"cog/logger":68}],199:[function(require,module,exports){
-/* jshint node: true */
-'use strict';
-
-var mbus = require('mbus');
-var queue = require('rtc-taskqueue');
-var cleanup = require('./cleanup');
-var monitor = require('./monitor');
-var throttle = require('cog/throttle');
-var pluck = require('whisk/pluck');
-var pluckCandidate = pluck('candidate', 'sdpMid', 'sdpMLineIndex');
-var CLOSED_STATES = [ 'closed', 'failed' ];
-var CHECKING_STATES = [ 'checking' ];
-
-/**
-  ### rtc-tools/couple
-
-  #### couple(pc, targetId, signaller, opts?)
-
-  Couple a WebRTC connection with another webrtc connection identified by
-  `targetId` via the signaller.
-
-  The following options can be provided in the `opts` argument:
-
-  - `sdpfilter` (default: null)
-
-    A simple function for filtering SDP as part of the peer
-    connection handshake (see the Using Filters details below).
-
-  ##### Example Usage
-
-  ```js
-  var couple = require('rtc/couple');
-
-  couple(pc, '54879965-ce43-426e-a8ef-09ac1e39a16d', signaller);
-  ```
-
-  ##### Using Filters
-
-  In certain instances you may wish to modify the raw SDP that is provided
-  by the `createOffer` and `createAnswer` calls.  This can be done by passing
-  a `sdpfilter` function (or array) in the options.  For example:
-
-  ```js
-  // run the sdp from through a local tweakSdp function.
-  couple(pc, '54879965-ce43-426e-a8ef-09ac1e39a16d', signaller, {
-    sdpfilter: tweakSdp
-  });
-  ```
-
-**/
-function couple(pc, targetId, signaller, opts) {
-  var debugLabel = (opts || {}).debugLabel || 'rtc';
-  var debug = require('cog/logger')(debugLabel + '/couple');
-
-  // create a monitor for the connection
-  var mon = monitor(pc, targetId, signaller, (opts || {}).logger);
-  var emit = mbus('', mon);
-  var reactive = (opts || {}).reactive;
-  var endOfCandidates = true;
-
-  // configure the time to wait between receiving a 'disconnect'
-  // iceConnectionState and determining that we are closed
-  var disconnectTimeout = (opts || {}).disconnectTimeout || 10000;
-  var disconnectTimer;
-
-  // Target ready indicates that the target peer has indicated it is
-  // ready to begin coupling
-  var targetReady = false;
-  var targetInfo = undefined;
-  var readyInterval = (opts || {}).readyInterval || 100;
-  var readyTimer;
-
-  // Failure timeout
-  var failTimeout = (opts || {}).failTimeout || 30000;
-  var failTimer;
-
-  // Request offer timer
-  var requestOfferTimer;
-
-  // Interoperability flags
-  var allowReactiveInterop = (opts || {}).allowReactiveInterop;
-
-  // initilaise the negotiation helpers
-  var isMaster = signaller.isMaster(targetId);
-
-  // initialise the processing queue (one at a time please)
-  var q = queue(pc, opts);
-  var coupling = false;
-  var negotiationRequired = false;
-  var renegotiateRequired = false;
-  var creatingOffer = false;
-  var interoperating = false;
-
-  /**
-    Indicates whether this peer connection is in a state where it is able to have new offers created
-   **/
-  function isReadyForOffer() {
-    return !coupling && pc.signalingState === 'stable';
-  }
-
-  function createOffer() {
-    // If coupling is already in progress, return
-    if (!isReadyForOffer()) return;
-
-    debug('[' + signaller.id + '] ' + 'Creating new offer for connection to ' + targetId);
-    // Otherwise, create the offer
-    coupling = true;
-    creatingOffer = true;
-    negotiationRequired = false;
-    q.createOffer().then(function() {
-      creatingOffer = false;
-    }).catch(function() {
-      creatingOffer = false;
-    });
-  }
-
-  var createOrRequestOffer = throttle(function() {
-    if (!targetReady) {
-      debug('[' + signaller.id + '] ' + targetId + ' not yet ready for offer');
-      return emit.once('target.ready', createOrRequestOffer);
-    }
-
-    // If this is not the master, always send the negotiate request
-    // Redundant requests are eliminated on the master side
-    if (! isMaster) {
-      debug('[' + signaller.id + '] ' + 'Requesting negotiation from ' + targetId + ' (requesting offerer? ' + renegotiateRequired + ')');
-      // Due to https://bugs.chromium.org/p/webrtc/issues/detail?id=2782 which involves incompatibilities between
-      // Chrome and Firefox created offers by default client offers are disabled to ensure that all offers are coming
-      // from the same source. By passing `allowReactiveInterop` you can reallow this, then use the `filtersdp` option
-      // to provide a munged SDP that might be able to work
-      return signaller.to(targetId).send('/negotiate', {
-        requestOfferer: (allowReactiveInterop || !interoperating) && renegotiateRequired
-      });
-    }
-
-    return createOffer();
-  }, 100, { leading: false });
-
-  function decouple() {
-    debug('decoupling ' + signaller.id + ' from ' + targetId);
-
-    // Clear any outstanding timers
-    clearTimeout(readyTimer);
-    clearTimeout(disconnectTimer);
-    clearTimeout(requestOfferTimer);
-    clearTimeout(failTimer);
-
-    // stop the monitor
-//     mon.removeAllListeners();
-    mon.close();
-    mon = undefined;
-
-    // clean up the task queue
-    q.clear();
-    q = undefined;
-    
-    // cleanup the peerconnection
-    cleanup(pc);
-
-    // remove listeners
-    signaller.removeListener('sdp', handleSdp);
-    signaller.removeListener('candidate', handleCandidate);
-    signaller.removeListener('endofcandidates', handleLastCandidate);
-    signaller.removeListener('negotiate', handleNegotiateRequest);
-    signaller.removeListener('ready', handleReady);
-    signaller.removeListener('requestoffer', handleRequestOffer);
-
-    // remove listeners (version >= 5)
-    signaller.removeListener('message:sdp', handleSdp);
-    signaller.removeListener('message:candidate', handleCandidate);
-    signaller.removeListener('message:endofcandidates', handleLastCandidate);
-    signaller.removeListener('message:negotiate', handleNegotiateRequest);
-    signaller.removeListener('message:ready', handleReady);
-    signaller.removeListener('message:requestoffer', handleRequestOffer);
-
-  }
-
-  function handleCandidate(data, src) {
-    // if the source is unknown or not a match, then don't process
-    if ((! src) || (src.id !== targetId)) {
-      return;
-    }
-
-    q.addIceCandidate(data);
-  }
-
-  // No op
-  function handleLastCandidate() {
-  }
-
-  function handleSdp(sdp, src) {
-    // if the source is unknown or not a match, then don't process
-    if ((! src) || (src.id !== targetId)) {
-      return;
-    }
-
-    emit('sdp.remote', sdp);
-
-    // To speed up things on the renegotiation side of things, determine whether we have
-    // finished the coupling (offer -> answer) cycle, and whether it is safe to start
-    // renegotiating prior to the iceConnectionState "completed" state
-    q.setRemoteDescription(sdp).then(function() {
-
-      // If this is the peer that is coupling, and we have received the answer so we can
-      // and assume that coupling (offer -> answer) process is complete, so we can clear the coupling flag
-      if (coupling && sdp.type === 'answer') {
-        debug('coupling complete, can now trigger any pending renegotiations');
-        if (isMaster && negotiationRequired) createOrRequestOffer();
-      }
-    });
-  }
-
-  function handleReady(src) {
-    if (targetReady || !src || src.id !== targetId) {
-      return;
-    }
-    debug('[' + signaller.id + '] ' + targetId + ' is ready for coupling');
-    targetReady = true;
-    targetInfo = src.data;
-    interoperating = (targetInfo.browser !== signaller.attributes.browser);
-    emit('target.ready');
-  }
-
-  function handleConnectionClose() {
-    debug('captured pc close, iceConnectionState = ' + pc.iceConnectionState);
-    decouple();
-  }
-
-  function handleDisconnect() {
-    debug('captured pc disconnect, monitoring connection status');
-
-    // start the disconnect timer
-    disconnectTimer = setTimeout(function() {
-      debug('manually closing connection after disconnect timeout');
-      mon('failed');
-      decouple();
-    }, disconnectTimeout);
-
-    mon.on('statechange', handleDisconnectAbort);
-    mon('failing');
-  }
-
-  function handleDisconnectAbort() {
-    debug('connection state changed to: ' + pc.iceConnectionState);
-
-    // if the state is checking, then do not reset the disconnect timer as
-    // we are doing our own checking
-    if (CHECKING_STATES.indexOf(pc.iceConnectionState) >= 0) {
-      return;
-    }
-
-    resetDisconnectTimer();
-
-    // if we have a closed or failed status, then close the connection
-    if (CLOSED_STATES.indexOf(pc.iceConnectionState) >= 0) {
-      return mon('closed');
-    }
-
-    mon.once('disconnect', handleDisconnect);
-  }
-
-  function handleLocalCandidate(evt) {
-    var data = evt.candidate && pluckCandidate(evt.candidate);
-
-    if (evt.candidate) {
-      resetDisconnectTimer();
-      emit('ice.local', data);
-      signaller.to(targetId).send('/candidate', data);
-      endOfCandidates = false;
-    }
-    else if (! endOfCandidates) {
-      endOfCandidates = true;
-      emit('ice.gathercomplete');
-      signaller.to(targetId).send('/endofcandidates', {});
-    }
-  }
-
-  function requestNegotiation() {
-    // This is a redundant request if not reactive
-    if (coupling && !reactive) return;
-
-    // If no coupling is occurring, regardless of reactive, start the offer process
-    if (!coupling) return createOrRequestOffer();
-
-    // If we are already coupling, we are reactive and renegotiation has not been indicated
-    // defer a negotiation request
-    if (coupling && reactive && !negotiationRequired) {
-      debug('renegotiation is required, but deferring until existing connection is established');
-      negotiationRequired = true;
-
-      // NOTE: This is commented out, as the functionality after the setRemoteDescription
-      // should adequately take care of this. But should it not, re-enable this
-      // mon.once('connectionstate:completed', function() {
-      //   createOrRequestOffer();
-      // });
-    }
-  }
-
-
-  /**
-    This allows the master to request the client to send an offer
-   **/
-  function requestOfferFromClient() {
-    if (requestOfferTimer) clearTimeout(requestOfferTimer);
-    if (pc.signalingState === 'closed') return;
-
-    // Check if we are ready for a new offer, otherwise delay
-    if (!isReadyForOffer()) {
-      debug('[' + signaller.id + '] negotiation request denied, not in a state to accept new offers [coupling = ' + coupling + ', ' + pc.signalingState + ']');
-      requestOfferTimer = setTimeout(requestOfferFromClient, 500);
-    } else {
-       // Flag as coupling and request the client send the offer
-      debug('[' + signaller.id + '] ' + targetId + ' has requested the ability to create the offer');
-      coupling = true;
-      return signaller.to(targetId).send('/requestoffer');
-    }
-  }
-
-  function handleNegotiateRequest(data, src) {
-    debug('[' + signaller.id + '] ' + src.id + ' has requested a negotiation');
-
-    // Sanity check that this is for the target
-    if (!src || src.id !== targetId) return;
-    emit('negotiate.request', src.id, data);
-
-    // Check if the client is requesting the ability to create the offer themselves
-    if (data && data.requestOfferer) {
-      return requestOfferFromClient();
-    }
-
-    // Otherwise, begin the traditional master driven negotiation process
-    requestNegotiation();
-  }
-
-  function handleRenegotiateRequest() {
-    if (!reactive) return;
-    emit('negotiate.renegotiate');
-    renegotiateRequired = true;
-    requestNegotiation();
-  }
-
-  function resetDisconnectTimer() {
-    var recovered = !!disconnectTimer && CLOSED_STATES.indexOf(pc.iceConnectionState) === -1;
-    mon.off('statechange', handleDisconnectAbort);
-
-    // clear the disconnect timer
-    debug('reset disconnect timer, state: ' + pc.iceConnectionState);
-    clearTimeout(disconnectTimer);
-    disconnectTimer = undefined;
-
-    // Trigger the recovered event if this is a recovery
-    if (recovered) {
-      mon('recovered');
-    }
-  }
-
-  /**
-    Allow clients to send offers
-   **/
-  function handleRequestOffer(src) {
-    if (!src || src.id !== targetId) return;
-    debug('[' + signaller.id + '] ' + targetId + ' has requested that the offer be sent [' + src.id + ']');
-    return createOffer();
-  }
-
-  // when regotiation is needed look for the peer
-  if (reactive) {
-    pc.onnegotiationneeded = handleRenegotiateRequest;
-  }
-
-  pc.onicecandidate = handleLocalCandidate;
-
-  // when the task queue tells us we have sdp available, send that over the wire
-  q.on('sdp.local', function(desc) {
-    signaller.to(targetId).send('/sdp', desc);
-  });
-
-  // when we receive sdp, then
-  signaller.on('sdp', handleSdp);
-  signaller.on('candidate', handleCandidate);
-  signaller.on('endofcandidates', handleLastCandidate);
-  signaller.on('ready', handleReady);
-
-  // listeners (signaller >= 5)
-  signaller.on('message:sdp', handleSdp);
-  signaller.on('message:candidate', handleCandidate);
-  signaller.on('message:endofcandidates', handleLastCandidate);
-  signaller.on('message:ready', handleReady);
-
-  // if this is a master connection, listen for negotiate events
-  if (isMaster) {
-    signaller.on('negotiate', handleNegotiateRequest);
-    signaller.on('message:negotiate', handleNegotiateRequest); // signaller >= 5
-  } else {
-    signaller.on('requestoffer', handleRequestOffer);
-    signaller.on('message:requestoffer', handleRequestOffer);
-  }
-
-  // when the connection closes, remove event handlers
-  mon.once('closed', handleConnectionClose);
-  mon.once('disconnected', handleDisconnect);
-
-  // patch in the create offer functions
-  mon.createOffer = createOrRequestOffer;
-
-  // A heavy handed approach to ensuring readiness across the coupling
-  // peers. Will periodically send the `ready` message to the target peer
-  // until the target peer has acknowledged that it also is ready - at which
-  // point the offer can be sent
-  function checkReady() {
-    clearTimeout(readyTimer);
-    signaller.to(targetId).send('/ready');
-
-    // If we are ready, they've told us they are ready, and we've told
-    // them we're ready, then exit
-    if (targetReady) return;
-
-    // Otherwise, keep telling them we're ready
-    readyTimer = setTimeout(checkReady, readyInterval);
-  }
-  checkReady();
-  debug('[' + signaller.id + '] ready for coupling to ' + targetId);
-
-  // If we fail to connect within the given timeframe, trigger a failure
-  failTimer = setTimeout(function() {
-    mon('failed');
-    decouple();
-  }, failTimeout);
-
-  mon.once('connected', function() {
-    clearTimeout(failTimer);
-  });
-
-  mon.on('signalingchange', function(pc, state) {
-    debug('[' + signaller.id + '] signaling state ' + state + ' to ' + targetId);
-  });
-
-  mon.on('signaling:stable', function() {
-    // Check if the coupling process is over
-    // creatingOffer is required due to the delay between the creation of the offer and the signaling
-    // state changing to have-local-offer
-    if (!creatingOffer && coupling) coupling = false;
-
-    // Check if we have any pending negotiations
-    if (negotiationRequired) {
-      createOrRequestOffer();
-    }
-  });
-
-  mon.stop = decouple;
-
-  /**
-    Aborts the coupling process
-   **/
-  mon.abort = function() {
-    if (failTimer) {
-      clearTimeout(failTimer);
-    }
-    decouple();
-    mon('aborted');
-  };
-
-  // Override destroy to clear the task queue as well
-  mon.destroy = function() {
-    mon.clear();
-    q.clear();
-  };
-
-  return mon;
-}
-
-module.exports = couple;
-},{"./cleanup":198,"./monitor":203,"cog/logger":68,"cog/throttle":69,"mbus":130,"rtc-taskqueue":213,"whisk/pluck":264}],200:[function(require,module,exports){
-/* jshint node: true */
-'use strict';
-
-/**
-  ### rtc-tools/detect
-
-  Provide the [rtc-core/detect](https://github.com/rtc-io/rtc-core#detect)
-  functionality.
-**/
-module.exports = require('rtc-core/detect');
-
-},{"rtc-core/detect":189}],201:[function(require,module,exports){
-/* jshint node: true */
-'use strict';
-
-var debug = require('cog/logger')('generators');
-var detect = require('./detect');
-var defaults = require('cog/defaults');
-
-var mappings = {
-  create: {
-    dtls: function(c) {
-      if (! detect.moz) {
-        c.optional = (c.optional || []).concat({ DtlsSrtpKeyAgreement: true });
-      }
-    }
-  }
-};
-
-/**
-  ### rtc-tools/generators
-
-  The generators package provides some utility methods for generating
-  constraint objects and similar constructs.
-
-  ```js
-  var generators = require('rtc/generators');
-  ```
-
-**/
-
-/**
-  #### generators.config(config)
-
-  Generate a configuration object suitable for passing into an W3C
-  RTCPeerConnection constructor first argument, based on our custom config.
-
-  In the event that you use short term authentication for TURN, and you want
-  to generate new `iceServers` regularly, you can specify an iceServerGenerator
-  that will be used prior to coupling. This generator should return a fully
-  compliant W3C (RTCIceServer dictionary)[http://www.w3.org/TR/webrtc/#idl-def-RTCIceServer].
-
-  If you pass in both a generator and iceServers, the iceServers _will be
-  ignored and the generator used instead.
-**/
-
-exports.config = function(config) {
-  var iceServerGenerator = (config || {}).iceServerGenerator;
-
-  return defaults({}, config, {
-    iceServers: typeof iceServerGenerator == 'function' ? iceServerGenerator() : []
-  });
-};
-
-/**
-  #### generators.connectionConstraints(flags, constraints)
-
-  This is a helper function that will generate appropriate connection
-  constraints for a new `RTCPeerConnection` object which is constructed
-  in the following way:
-
-  ```js
-  var conn = new RTCPeerConnection(flags, constraints);
-  ```
-
-  In most cases the constraints object can be left empty, but when creating
-  data channels some additional options are required.  This function
-  can generate those additional options and intelligently combine any
-  user defined constraints (in `constraints`) with shorthand flags that
-  might be passed while using the `rtc.createConnection` helper.
-**/
-exports.connectionConstraints = function(flags, constraints) {
-  var generated = {};
-  var m = mappings.create;
-  var out;
-
-  // iterate through the flags and apply the create mappings
-  Object.keys(flags || {}).forEach(function(key) {
-    if (m[key]) {
-      m[key](generated);
-    }
-  });
-
-  // generate the connection constraints
-  out = defaults({}, constraints, generated);
-  debug('generated connection constraints: ', out);
-
-  return out;
-};
-
-},{"./detect":200,"cog/defaults":64,"cog/logger":68}],202:[function(require,module,exports){
-/* jshint node: true */
-
-'use strict';
-
-/**
-  # rtc-tools
-
-  The `rtc-tools` module does most of the heavy lifting within the
-  [rtc.io](http://rtc.io) suite.  Primarily it handles the logic of coupling
-  a local `RTCPeerConnection` with it's remote counterpart via an
-  [rtc-signaller](https://github.com/rtc-io/rtc-signaller) signalling
-  channel.
-
-  ## Getting Started
-
-  If you decide that the `rtc-tools` module is a better fit for you than either
-  [rtc-quickconnect](https://github.com/rtc-io/rtc-quickconnect) or
-  [rtc](https://github.com/rtc-io/rtc) then the code snippet below
-  will provide you a guide on how to get started using it in conjunction with
-  the [rtc-signaller](https://github.com/rtc-io/rtc-signaller) (version 5.0 and above)
-  and [rtc-media](https://github.com/rtc-io/rtc-media) modules:
-
-  <<< examples/getting-started.js
-
-  This code definitely doesn't cover all the cases that you need to consider
-  (i.e. peers leaving, etc) but it should demonstrate how to:
-
-  1. Capture video and add it to a peer connection
-  2. Couple a local peer connection with a remote peer connection
-  3. Deal with the remote steam being discovered and how to render
-     that to the local interface.
-
-  ## Reference
-
-**/
-
-var gen = require('./generators');
-
-// export detect
-var detect = exports.detect = require('./detect');
-var findPlugin = require('rtc-core/plugin');
-
-// export cog logger for convenience
-exports.logger = require('cog/logger');
-
-// export peer connection
-var RTCPeerConnection =
-exports.RTCPeerConnection = detect('RTCPeerConnection');
-
-// add the couple utility
-exports.couple = require('./couple');
-
-/**
-  ### createConnection
-
-  ```
-  createConnection(opts?, constraints?) => RTCPeerConnection
-  ```
-
-  Create a new `RTCPeerConnection` auto generating default opts as required.
-
-  ```js
-  var conn;
-
-  // this is ok
-  conn = rtc.createConnection();
-
-  // and so is this
-  conn = rtc.createConnection({
-    iceServers: []
-  });
-  ```
-**/
-exports.createConnection = function(opts, constraints) {
-  var plugin = findPlugin((opts || {}).plugins);
-  var PeerConnection = (opts || {}).RTCPeerConnection || RTCPeerConnection;
-
-  // generate the config based on options provided
-  var config = gen.config(opts);
-
-  // generate appropriate connection constraints
-  constraints = gen.connectionConstraints(opts, constraints);
-
-  if (plugin && typeof plugin.createConnection == 'function') {
-    return plugin.createConnection(config, constraints);
-  }
-
-  return new PeerConnection(config, constraints);
-};
-
-},{"./couple":199,"./detect":200,"./generators":201,"cog/logger":68,"rtc-core/plugin":191}],203:[function(require,module,exports){
-/* jshint node: true */
-'use strict';
-
-var mbus = require('mbus');
-
-// define some state mappings to simplify the events we generate
-var stateMappings = {
-  completed: 'connected'
-};
-
-// define the events that we need to watch for peer connection
-// state changes
-var peerStateEvents = [
-  'signalingstatechange',
-  'iceconnectionstatechange',
-];
-
-/**
-  ### rtc-tools/monitor
-
-  ```
-  monitor(pc, targetId, signaller, parentBus) => mbus
-  ```
-
-  The monitor is a useful tool for determining the state of `pc` (an
-  `RTCPeerConnection`) instance in the context of your application. The
-  monitor uses both the `iceConnectionState` information of the peer
-  connection and also the various
-  [signaller events](https://github.com/rtc-io/rtc-signaller#signaller-events)
-  to determine when the connection has been `connected` and when it has
-  been `disconnected`.
-
-  A monitor created `mbus` is returned as the result of a
-  [couple](https://github.com/rtc-io/rtc#rtccouple) between a local peer
-  connection and it's remote counterpart.
-
-**/
-module.exports = function(pc, targetId, signaller, parentBus) {
-  var monitor = mbus('', parentBus);
-  var state;
-  var connectionState;
-  var signalingState;
-  var isClosed = false;
-
-  function checkState() {
-    var newConnectionState = pc.iceConnectionState;
-    var newState = getMappedState(newConnectionState);
-    var newSignalingState = pc.signalingState;
-
-    // flag the we had a state change
-    monitor('statechange', pc, newState);
-    monitor('connectionstatechange', pc, newConnectionState);
-
-    // if the active state has changed, then send the appopriate message
-    if (state !== newState) {
-      monitor(newState);
-      state = newState;
-    }
-
-    if (connectionState !== newConnectionState) {
-      monitor('connectionstate:' + newConnectionState);
-      connectionState = newConnectionState;
-    }
-
-    // As Firefox does not always support `onclose`, if the state is closed
-    // and we haven't already handled the close, do so now
-    if (newState === 'closed' && !isClosed) {
-      handleClose();
-    }
-
-    // Check the signalling state to see if it has also changed
-    if (signalingState !== newSignalingState) {
-      monitor('signalingchange', pc, newSignalingState, signalingState);
-      monitor('signaling:' + newSignalingState, pc, newSignalingState, signalingState);
-      signalingState = newSignalingState;
-    }
-  }
-
-  function handleClose() {
-    if (isClosed) return;
-    isClosed = true;
-    monitor('closed');
-  }
-
-  pc.onclose = handleClose;
-  peerStateEvents.forEach(function(evtName) {
-    pc['on' + evtName] = checkState;
-  });
-
-  monitor.close = function() {
-    pc.onclose = null;
-    peerStateEvents.forEach(function(evtName) {
-      pc['on' + evtName] = null;
-    });
-    
-    monitor.clear();
-    monitor = undefined;
-  };
-
-  monitor.destroy = function() {
-    monitor.clear();
-  };
-
-  // if we haven't been provided a valid peer connection, abort
-  if (! pc) {
-    return monitor;
-  }
-
-  // determine the initial is active state
-  state = getMappedState(pc.iceConnectionState);
-
-  return monitor;
-};
-
-/* internal helpers */
-
-function getMappedState(state) {
-  return stateMappings[state] || state;
-}
-
-},{"mbus":130}],204:[function(require,module,exports){
+},{"rtc-tools":213}],198:[function(require,module,exports){
 /* jshint node: true */
 'use strict';
 
@@ -34041,7 +33185,7 @@ module.exports = function(sdp) {
   return ops;
 };
 
-},{"./parsers":205,"whisk/flatten":261,"whisk/nub":263,"whisk/pluck":264}],205:[function(require,module,exports){
+},{"./parsers":199,"whisk/flatten":261,"whisk/nub":263,"whisk/pluck":264}],199:[function(require,module,exports){
 /* jshint node: true */
 'use strict';
 
@@ -34066,7 +33210,7 @@ exports.m = function(parsed, line) {
 
   return addChildLine;
 };
-},{}],206:[function(require,module,exports){
+},{}],200:[function(require,module,exports){
 var validators = [
   [ /^(a\=candidate.*)$/, require('rtc-validator/candidate') ]
 ];
@@ -34123,7 +33267,7 @@ function detectLineBreak(input) {
   return match && match[0];
 }
 
-},{"rtc-validator/candidate":215}],207:[function(require,module,exports){
+},{"rtc-validator/candidate":215}],201:[function(require,module,exports){
 var extend = require('cog/extend');
 
 module.exports = function(signaller) {
@@ -34192,7 +33336,7 @@ module.exports = function(signaller) {
   };
 };
 
-},{"cog/extend":65}],208:[function(require,module,exports){
+},{"cog/extend":65}],202:[function(require,module,exports){
 /**
   ### prepare
 
@@ -34218,7 +33362,7 @@ function prepareArg(arg) {
   return arg;
 }
 
-},{}],209:[function(require,module,exports){
+},{}],203:[function(require,module,exports){
 var jsonparse = require('cog/jsonparse');
 
 /**
@@ -34336,7 +33480,7 @@ module.exports = function(signaller, opts) {
   };
 };
 
-},{"./handlers/announce":207,"cog/jsonparse":67}],210:[function(require,module,exports){
+},{"./handlers/announce":201,"cog/jsonparse":67}],204:[function(require,module,exports){
 var detect = require('rtc-core/detect');
 var extend = require('cog/extend');
 var getable = require('cog/getable');
@@ -34522,7 +33666,7 @@ module.exports = function(opts, bufferMessage) {
   return signaller;
 };
 
-},{"./prepare":208,"./process":209,"cog/extend":65,"cog/getable":66,"cuid":78,"mbus":130,"rtc-core/detect":189}],211:[function(require,module,exports){
+},{"./prepare":202,"./process":203,"cog/extend":65,"cog/getable":66,"cuid":78,"mbus":130,"rtc-core/detect":189}],205:[function(require,module,exports){
 /* jshint node: true */
 'use strict';
 
@@ -34777,7 +33921,7 @@ module.exports = function(messenger, opts) {
   return signaller;
 };
 
-},{"cog/extend":65,"cog/getable":66,"cuid":78,"mbus":130,"pull-pushable":164,"pull-stream":170,"rtc-core/detect":189,"rtc-signal/prepare":208,"rtc-signal/signaller":210}],212:[function(require,module,exports){
+},{"cog/extend":65,"cog/getable":66,"cuid":78,"mbus":130,"pull-pushable":164,"pull-stream":170,"rtc-core/detect":189,"rtc-signal/prepare":202,"rtc-signal/signaller":204}],206:[function(require,module,exports){
 var extend = require('cog/extend');
 
 /**
@@ -34795,7 +33939,7 @@ module.exports = function(switchboard, opts) {
   }, opts));
 };
 
-},{"cog/extend":65,"messenger-ws":131}],213:[function(require,module,exports){
+},{"cog/extend":65,"messenger-ws":131}],207:[function(require,module,exports){
 var detect = require('rtc-core/detect');
 var findPlugin = require('rtc-core/plugin');
 var PriorityQueue = require('priorityqueuejs');
@@ -35264,7 +34408,7 @@ module.exports = function(pc, opts) {
   return tq;
 };
 
-},{"es6-promise":214,"mbus":130,"priorityqueuejs":154,"rtc-core/detect":189,"rtc-core/plugin":191,"rtc-sdp":204,"rtc-sdpclean":206,"rtc-validator/candidate":215,"whisk/pluck":264}],214:[function(require,module,exports){
+},{"es6-promise":208,"mbus":130,"priorityqueuejs":154,"rtc-core/detect":189,"rtc-core/plugin":191,"rtc-sdp":198,"rtc-sdpclean":200,"rtc-validator/candidate":215,"whisk/pluck":264}],208:[function(require,module,exports){
 (function (process,global){
 /*!
  * @overview es6-promise - a tiny implementation of Promises/A+.
@@ -36421,7 +35565,856 @@ return Promise;
 })));
 
 }).call(this,require('_process'),typeof global !== "undefined" ? global : typeof self !== "undefined" ? self : typeof window !== "undefined" ? window : {})
-},{"_process":156}],215:[function(require,module,exports){
+},{"_process":156}],209:[function(require,module,exports){
+/* jshint node: true */
+'use strict';
+
+var debug = require('cog/logger')('rtc/cleanup');
+
+var CANNOT_CLOSE_STATES = [
+  'closed'
+];
+
+var EVENTS_DECOUPLE_BC = [
+  'addstream',
+  'datachannel',
+  'icecandidate',
+  'negotiationneeded',
+  'removestream',
+  'signalingstatechange'
+];
+
+var EVENTS_DECOUPLE_AC = [
+  'iceconnectionstatechange'
+];
+
+/**
+  ### rtc-tools/cleanup
+
+  ```
+  cleanup(pc)
+  ```
+
+  The `cleanup` function is used to ensure that a peer connection is properly
+  closed and ready to be cleaned up by the browser.
+
+**/
+module.exports = function(pc) {
+  if (!pc) return;
+
+  // see if we can close the connection
+  var currentState = pc.iceConnectionState;
+  var currentSignaling = pc.signalingState;
+  var canClose = CANNOT_CLOSE_STATES.indexOf(currentState) < 0 && CANNOT_CLOSE_STATES.indexOf(currentSignaling) < 0;
+
+  function decouple(events) {
+    events.forEach(function(evtName) {
+      if (pc['on' + evtName]) {
+        pc['on' + evtName] = null;
+      }
+    });
+  }
+
+  // decouple "before close" events
+  decouple(EVENTS_DECOUPLE_BC);
+
+  if (canClose) {
+    debug('attempting connection close, current state: '+ pc.iceConnectionState);
+    try {
+      pc.close();
+    } catch (e) {
+      console.warn('Could not close connection', e);
+    }
+  }
+
+  // remove the event listeners
+  // after a short delay giving the connection time to trigger
+  // close and iceconnectionstatechange events
+  setTimeout(function() {
+    decouple(EVENTS_DECOUPLE_AC);
+  }, 100);
+};
+
+},{"cog/logger":68}],210:[function(require,module,exports){
+/* jshint node: true */
+'use strict';
+
+var mbus = require('mbus');
+var queue = require('rtc-taskqueue');
+var cleanup = require('./cleanup');
+var monitor = require('./monitor');
+var throttle = require('cog/throttle');
+var pluck = require('whisk/pluck');
+var pluckCandidate = pluck('candidate', 'sdpMid', 'sdpMLineIndex');
+var CLOSED_STATES = [ 'closed', 'failed' ];
+var CHECKING_STATES = [ 'checking' ];
+
+/**
+  ### rtc-tools/couple
+
+  #### couple(pc, targetId, signaller, opts?)
+
+  Couple a WebRTC connection with another webrtc connection identified by
+  `targetId` via the signaller.
+
+  The following options can be provided in the `opts` argument:
+
+  - `sdpfilter` (default: null)
+
+    A simple function for filtering SDP as part of the peer
+    connection handshake (see the Using Filters details below).
+
+  ##### Example Usage
+
+  ```js
+  var couple = require('rtc/couple');
+
+  couple(pc, '54879965-ce43-426e-a8ef-09ac1e39a16d', signaller);
+  ```
+
+  ##### Using Filters
+
+  In certain instances you may wish to modify the raw SDP that is provided
+  by the `createOffer` and `createAnswer` calls.  This can be done by passing
+  a `sdpfilter` function (or array) in the options.  For example:
+
+  ```js
+  // run the sdp from through a local tweakSdp function.
+  couple(pc, '54879965-ce43-426e-a8ef-09ac1e39a16d', signaller, {
+    sdpfilter: tweakSdp
+  });
+  ```
+
+**/
+function couple(pc, targetId, signaller, opts) {
+  var debugLabel = (opts || {}).debugLabel || 'rtc';
+  var debug = require('cog/logger')(debugLabel + '/couple');
+
+  // create a monitor for the connection
+  var mon = monitor(pc, targetId, signaller, (opts || {}).logger);
+  var emit = mbus('', mon);
+  var reactive = (opts || {}).reactive;
+  var endOfCandidates = true;
+
+  // configure the time to wait between receiving a 'disconnect'
+  // iceConnectionState and determining that we are closed
+  var disconnectTimeout = (opts || {}).disconnectTimeout || 10000;
+  var disconnectTimer;
+
+  // Target ready indicates that the target peer has indicated it is
+  // ready to begin coupling
+  var targetReady = false;
+  var targetInfo = undefined;
+  var readyInterval = (opts || {}).readyInterval || 100;
+  var readyTimer;
+
+  // Failure timeout
+  var failTimeout = (opts || {}).failTimeout || 30000;
+  var failTimer;
+
+  // Request offer timer
+  var requestOfferTimer;
+
+  // Interoperability flags
+  var allowReactiveInterop = (opts || {}).allowReactiveInterop;
+
+  // initilaise the negotiation helpers
+  var isMaster = signaller.isMaster(targetId);
+
+  // initialise the processing queue (one at a time please)
+  var q = queue(pc, opts);
+  var coupling = false;
+  var negotiationRequired = false;
+  var renegotiateRequired = false;
+  var creatingOffer = false;
+  var interoperating = false;
+
+  /**
+    Indicates whether this peer connection is in a state where it is able to have new offers created
+   **/
+  function isReadyForOffer() {
+    return !coupling && pc.signalingState === 'stable';
+  }
+
+  function createOffer() {
+    // If coupling is already in progress, return
+    if (!isReadyForOffer()) return;
+
+    debug('[' + signaller.id + '] ' + 'Creating new offer for connection to ' + targetId);
+    // Otherwise, create the offer
+    coupling = true;
+    creatingOffer = true;
+    negotiationRequired = false;
+    q.createOffer().then(function() {
+      creatingOffer = false;
+    }).catch(function() {
+      creatingOffer = false;
+    });
+  }
+
+  var createOrRequestOffer = throttle(function() {
+    if (!targetReady) {
+      debug('[' + signaller.id + '] ' + targetId + ' not yet ready for offer');
+      return emit.once('target.ready', createOrRequestOffer);
+    }
+
+    // If this is not the master, always send the negotiate request
+    // Redundant requests are eliminated on the master side
+    if (! isMaster) {
+      debug('[' + signaller.id + '] ' + 'Requesting negotiation from ' + targetId + ' (requesting offerer? ' + renegotiateRequired + ')');
+      // Due to https://bugs.chromium.org/p/webrtc/issues/detail?id=2782 which involves incompatibilities between
+      // Chrome and Firefox created offers by default client offers are disabled to ensure that all offers are coming
+      // from the same source. By passing `allowReactiveInterop` you can reallow this, then use the `filtersdp` option
+      // to provide a munged SDP that might be able to work
+      return signaller.to(targetId).send('/negotiate', {
+        requestOfferer: (allowReactiveInterop || !interoperating) && renegotiateRequired
+      });
+    }
+
+    return createOffer();
+  }, 100, { leading: false });
+
+  function decouple() {
+    debug('decoupling ' + signaller.id + ' from ' + targetId);
+
+    // Clear any outstanding timers
+    clearTimeout(readyTimer);
+    clearTimeout(disconnectTimer);
+    clearTimeout(requestOfferTimer);
+    clearTimeout(failTimer);
+
+    // stop the monitor
+//     mon.removeAllListeners();
+    mon.close();
+
+    // cleanup the peerconnection
+    cleanup(pc);
+
+    // remove listeners
+    signaller.removeListener('sdp', handleSdp);
+    signaller.removeListener('candidate', handleCandidate);
+    signaller.removeListener('endofcandidates', handleLastCandidate);
+    signaller.removeListener('negotiate', handleNegotiateRequest);
+    signaller.removeListener('ready', handleReady);
+    signaller.removeListener('requestoffer', handleRequestOffer);
+
+    // remove listeners (version >= 5)
+    signaller.removeListener('message:sdp', handleSdp);
+    signaller.removeListener('message:candidate', handleCandidate);
+    signaller.removeListener('message:endofcandidates', handleLastCandidate);
+    signaller.removeListener('message:negotiate', handleNegotiateRequest);
+    signaller.removeListener('message:ready', handleReady);
+    signaller.removeListener('message:requestoffer', handleRequestOffer);
+
+  }
+
+  function handleCandidate(data, src) {
+    // if the source is unknown or not a match, then don't process
+    if ((! src) || (src.id !== targetId)) {
+      return;
+    }
+
+    q.addIceCandidate(data);
+  }
+
+  // No op
+  function handleLastCandidate() {
+  }
+
+  function handleSdp(sdp, src) {
+    // if the source is unknown or not a match, then don't process
+    if ((! src) || (src.id !== targetId)) {
+      return;
+    }
+
+    emit('sdp.remote', sdp);
+
+    // To speed up things on the renegotiation side of things, determine whether we have
+    // finished the coupling (offer -> answer) cycle, and whether it is safe to start
+    // renegotiating prior to the iceConnectionState "completed" state
+    q.setRemoteDescription(sdp).then(function() {
+
+      // If this is the peer that is coupling, and we have received the answer so we can
+      // and assume that coupling (offer -> answer) process is complete, so we can clear the coupling flag
+      if (coupling && sdp.type === 'answer') {
+        debug('coupling complete, can now trigger any pending renegotiations');
+        if (isMaster && negotiationRequired) createOrRequestOffer();
+      }
+    });
+  }
+
+  function handleReady(src) {
+    if (targetReady || !src || src.id !== targetId) {
+      return;
+    }
+    debug('[' + signaller.id + '] ' + targetId + ' is ready for coupling');
+    targetReady = true;
+    targetInfo = src.data;
+    interoperating = (targetInfo.browser !== signaller.attributes.browser);
+    emit('target.ready');
+  }
+
+  function handleConnectionClose() {
+    debug('captured pc close, iceConnectionState = ' + pc.iceConnectionState);
+    decouple();
+  }
+
+  function handleDisconnect() {
+    debug('captured pc disconnect, monitoring connection status');
+
+    // start the disconnect timer
+    disconnectTimer = setTimeout(function() {
+      debug('manually closing connection after disconnect timeout');
+      mon('failed');
+      cleanup(pc);
+    }, disconnectTimeout);
+
+    mon.on('statechange', handleDisconnectAbort);
+    mon('failing');
+  }
+
+  function handleDisconnectAbort() {
+    debug('connection state changed to: ' + pc.iceConnectionState);
+
+    // if the state is checking, then do not reset the disconnect timer as
+    // we are doing our own checking
+    if (CHECKING_STATES.indexOf(pc.iceConnectionState) >= 0) {
+      return;
+    }
+
+    resetDisconnectTimer();
+
+    // if we have a closed or failed status, then close the connection
+    if (CLOSED_STATES.indexOf(pc.iceConnectionState) >= 0) {
+      return mon('closed');
+    }
+
+    mon.once('disconnect', handleDisconnect);
+  }
+
+  function handleLocalCandidate(evt) {
+    var data = evt.candidate && pluckCandidate(evt.candidate);
+
+    if (evt.candidate) {
+      resetDisconnectTimer();
+      emit('ice.local', data);
+      signaller.to(targetId).send('/candidate', data);
+      endOfCandidates = false;
+    }
+    else if (! endOfCandidates) {
+      endOfCandidates = true;
+      emit('ice.gathercomplete');
+      signaller.to(targetId).send('/endofcandidates', {});
+    }
+  }
+
+  function requestNegotiation() {
+    // This is a redundant request if not reactive
+    if (coupling && !reactive) return;
+
+    // If no coupling is occurring, regardless of reactive, start the offer process
+    if (!coupling) return createOrRequestOffer();
+
+    // If we are already coupling, we are reactive and renegotiation has not been indicated
+    // defer a negotiation request
+    if (coupling && reactive && !negotiationRequired) {
+      debug('renegotiation is required, but deferring until existing connection is established');
+      negotiationRequired = true;
+
+      // NOTE: This is commented out, as the functionality after the setRemoteDescription
+      // should adequately take care of this. But should it not, re-enable this
+      // mon.once('connectionstate:completed', function() {
+      //   createOrRequestOffer();
+      // });
+    }
+  }
+
+
+  /**
+    This allows the master to request the client to send an offer
+   **/
+  function requestOfferFromClient() {
+    if (requestOfferTimer) clearTimeout(requestOfferTimer);
+    if (pc.signalingState === 'closed') return;
+
+    // Check if we are ready for a new offer, otherwise delay
+    if (!isReadyForOffer()) {
+      debug('[' + signaller.id + '] negotiation request denied, not in a state to accept new offers [coupling = ' + coupling + ', ' + pc.signalingState + ']');
+      requestOfferTimer = setTimeout(requestOfferFromClient, 500);
+    } else {
+       // Flag as coupling and request the client send the offer
+      debug('[' + signaller.id + '] ' + targetId + ' has requested the ability to create the offer');
+      coupling = true;
+      return signaller.to(targetId).send('/requestoffer');
+    }
+  }
+
+  function handleNegotiateRequest(data, src) {
+    debug('[' + signaller.id + '] ' + src.id + ' has requested a negotiation');
+
+    // Sanity check that this is for the target
+    if (!src || src.id !== targetId) return;
+    emit('negotiate.request', src.id, data);
+
+    // Check if the client is requesting the ability to create the offer themselves
+    if (data && data.requestOfferer) {
+      return requestOfferFromClient();
+    }
+
+    // Otherwise, begin the traditional master driven negotiation process
+    requestNegotiation();
+  }
+
+  function handleRenegotiateRequest() {
+    if (!reactive) return;
+    emit('negotiate.renegotiate');
+    renegotiateRequired = true;
+    requestNegotiation();
+  }
+
+  function resetDisconnectTimer() {
+    var recovered = !!disconnectTimer && CLOSED_STATES.indexOf(pc.iceConnectionState) === -1;
+    mon.off('statechange', handleDisconnectAbort);
+
+    // clear the disconnect timer
+    debug('reset disconnect timer, state: ' + pc.iceConnectionState);
+    clearTimeout(disconnectTimer);
+    disconnectTimer = undefined;
+
+    // Trigger the recovered event if this is a recovery
+    if (recovered) {
+      mon('recovered');
+    }
+  }
+
+  /**
+    Allow clients to send offers
+   **/
+  function handleRequestOffer(src) {
+    if (!src || src.id !== targetId) return;
+    debug('[' + signaller.id + '] ' + targetId + ' has requested that the offer be sent [' + src.id + ']');
+    return createOffer();
+  }
+
+  // when regotiation is needed look for the peer
+  if (reactive) {
+    pc.onnegotiationneeded = handleRenegotiateRequest;
+  }
+
+  pc.onicecandidate = handleLocalCandidate;
+
+  // when the task queue tells us we have sdp available, send that over the wire
+  q.on('sdp.local', function(desc) {
+    signaller.to(targetId).send('/sdp', desc);
+  });
+
+  // when we receive sdp, then
+  signaller.on('sdp', handleSdp);
+  signaller.on('candidate', handleCandidate);
+  signaller.on('endofcandidates', handleLastCandidate);
+  signaller.on('ready', handleReady);
+
+  // listeners (signaller >= 5)
+  signaller.on('message:sdp', handleSdp);
+  signaller.on('message:candidate', handleCandidate);
+  signaller.on('message:endofcandidates', handleLastCandidate);
+  signaller.on('message:ready', handleReady);
+
+  // if this is a master connection, listen for negotiate events
+  if (isMaster) {
+    signaller.on('negotiate', handleNegotiateRequest);
+    signaller.on('message:negotiate', handleNegotiateRequest); // signaller >= 5
+  } else {
+    signaller.on('requestoffer', handleRequestOffer);
+    signaller.on('message:requestoffer', handleRequestOffer);
+  }
+
+  // when the connection closes, remove event handlers
+  mon.once('closed', handleConnectionClose);
+  mon.once('disconnected', handleDisconnect);
+
+  // patch in the create offer functions
+  mon.createOffer = createOrRequestOffer;
+
+  // A heavy handed approach to ensuring readiness across the coupling
+  // peers. Will periodically send the `ready` message to the target peer
+  // until the target peer has acknowledged that it also is ready - at which
+  // point the offer can be sent
+  function checkReady() {
+    clearTimeout(readyTimer);
+    signaller.to(targetId).send('/ready');
+
+    // If we are ready, they've told us they are ready, and we've told
+    // them we're ready, then exit
+    if (targetReady) return;
+
+    // Otherwise, keep telling them we're ready
+    readyTimer = setTimeout(checkReady, readyInterval);
+  }
+  checkReady();
+  debug('[' + signaller.id + '] ready for coupling to ' + targetId);
+
+  // If we fail to connect within the given timeframe, trigger a failure
+  failTimer = setTimeout(function() {
+    mon('failed');
+    decouple();
+  }, failTimeout);
+
+  mon.once('connected', function() {
+    clearTimeout(failTimer);
+  });
+
+  mon.on('signalingchange', function(pc, state) {
+    debug('[' + signaller.id + '] signaling state ' + state + ' to ' + targetId);
+  });
+
+  mon.on('signaling:stable', function() {
+    // Check if the coupling process is over
+    // creatingOffer is required due to the delay between the creation of the offer and the signaling
+    // state changing to have-local-offer
+    if (!creatingOffer && coupling) coupling = false;
+
+    // Check if we have any pending negotiations
+    if (negotiationRequired) {
+      createOrRequestOffer();
+    }
+  });
+
+  mon.stop = decouple;
+
+  /**
+    Aborts the coupling process
+   **/
+  mon.abort = function() {
+    if (failTimer) {
+      clearTimeout(failTimer);
+    }
+    decouple();
+    mon('aborted');
+  };
+
+  // Override destroy to clear the task queue as well
+  mon.destroy = function() {
+    mon.clear();
+    q.clear();
+  };
+
+  return mon;
+}
+
+module.exports = couple;
+},{"./cleanup":209,"./monitor":214,"cog/logger":68,"cog/throttle":69,"mbus":130,"rtc-taskqueue":207,"whisk/pluck":264}],211:[function(require,module,exports){
+/* jshint node: true */
+'use strict';
+
+/**
+  ### rtc-tools/detect
+
+  Provide the [rtc-core/detect](https://github.com/rtc-io/rtc-core#detect)
+  functionality.
+**/
+module.exports = require('rtc-core/detect');
+
+},{"rtc-core/detect":189}],212:[function(require,module,exports){
+/* jshint node: true */
+'use strict';
+
+var debug = require('cog/logger')('generators');
+var detect = require('./detect');
+var defaults = require('cog/defaults');
+
+var mappings = {
+  create: {
+    dtls: function(c) {
+      if (! detect.moz) {
+        c.optional = (c.optional || []).concat({ DtlsSrtpKeyAgreement: true });
+      }
+    }
+  }
+};
+
+/**
+  ### rtc-tools/generators
+
+  The generators package provides some utility methods for generating
+  constraint objects and similar constructs.
+
+  ```js
+  var generators = require('rtc/generators');
+  ```
+
+**/
+
+/**
+  #### generators.config(config)
+
+  Generate a configuration object suitable for passing into an W3C
+  RTCPeerConnection constructor first argument, based on our custom config.
+
+  In the event that you use short term authentication for TURN, and you want
+  to generate new `iceServers` regularly, you can specify an iceServerGenerator
+  that will be used prior to coupling. This generator should return a fully
+  compliant W3C (RTCIceServer dictionary)[http://www.w3.org/TR/webrtc/#idl-def-RTCIceServer].
+
+  If you pass in both a generator and iceServers, the iceServers _will be
+  ignored and the generator used instead.
+**/
+
+exports.config = function(config) {
+  var iceServerGenerator = (config || {}).iceServerGenerator;
+
+  return defaults({}, config, {
+    iceServers: typeof iceServerGenerator == 'function' ? iceServerGenerator() : []
+  });
+};
+
+/**
+  #### generators.connectionConstraints(flags, constraints)
+
+  This is a helper function that will generate appropriate connection
+  constraints for a new `RTCPeerConnection` object which is constructed
+  in the following way:
+
+  ```js
+  var conn = new RTCPeerConnection(flags, constraints);
+  ```
+
+  In most cases the constraints object can be left empty, but when creating
+  data channels some additional options are required.  This function
+  can generate those additional options and intelligently combine any
+  user defined constraints (in `constraints`) with shorthand flags that
+  might be passed while using the `rtc.createConnection` helper.
+**/
+exports.connectionConstraints = function(flags, constraints) {
+  var generated = {};
+  var m = mappings.create;
+  var out;
+
+  // iterate through the flags and apply the create mappings
+  Object.keys(flags || {}).forEach(function(key) {
+    if (m[key]) {
+      m[key](generated);
+    }
+  });
+
+  // generate the connection constraints
+  out = defaults({}, constraints, generated);
+  debug('generated connection constraints: ', out);
+
+  return out;
+};
+
+},{"./detect":211,"cog/defaults":64,"cog/logger":68}],213:[function(require,module,exports){
+/* jshint node: true */
+
+'use strict';
+
+/**
+  # rtc-tools
+
+  The `rtc-tools` module does most of the heavy lifting within the
+  [rtc.io](http://rtc.io) suite.  Primarily it handles the logic of coupling
+  a local `RTCPeerConnection` with it's remote counterpart via an
+  [rtc-signaller](https://github.com/rtc-io/rtc-signaller) signalling
+  channel.
+
+  ## Getting Started
+
+  If you decide that the `rtc-tools` module is a better fit for you than either
+  [rtc-quickconnect](https://github.com/rtc-io/rtc-quickconnect) or
+  [rtc](https://github.com/rtc-io/rtc) then the code snippet below
+  will provide you a guide on how to get started using it in conjunction with
+  the [rtc-signaller](https://github.com/rtc-io/rtc-signaller) (version 5.0 and above)
+  and [rtc-media](https://github.com/rtc-io/rtc-media) modules:
+
+  <<< examples/getting-started.js
+
+  This code definitely doesn't cover all the cases that you need to consider
+  (i.e. peers leaving, etc) but it should demonstrate how to:
+
+  1. Capture video and add it to a peer connection
+  2. Couple a local peer connection with a remote peer connection
+  3. Deal with the remote steam being discovered and how to render
+     that to the local interface.
+
+  ## Reference
+
+**/
+
+var gen = require('./generators');
+
+// export detect
+var detect = exports.detect = require('./detect');
+var findPlugin = require('rtc-core/plugin');
+
+// export cog logger for convenience
+exports.logger = require('cog/logger');
+
+// export peer connection
+var RTCPeerConnection =
+exports.RTCPeerConnection = detect('RTCPeerConnection');
+
+// add the couple utility
+exports.couple = require('./couple');
+
+/**
+  ### createConnection
+
+  ```
+  createConnection(opts?, constraints?) => RTCPeerConnection
+  ```
+
+  Create a new `RTCPeerConnection` auto generating default opts as required.
+
+  ```js
+  var conn;
+
+  // this is ok
+  conn = rtc.createConnection();
+
+  // and so is this
+  conn = rtc.createConnection({
+    iceServers: []
+  });
+  ```
+**/
+exports.createConnection = function(opts, constraints) {
+  var plugin = findPlugin((opts || {}).plugins);
+  var PeerConnection = (opts || {}).RTCPeerConnection || RTCPeerConnection;
+
+  // generate the config based on options provided
+  var config = gen.config(opts);
+
+  // generate appropriate connection constraints
+  constraints = gen.connectionConstraints(opts, constraints);
+
+  if (plugin && typeof plugin.createConnection == 'function') {
+    return plugin.createConnection(config, constraints);
+  }
+
+  return new PeerConnection(config, constraints);
+};
+
+},{"./couple":210,"./detect":211,"./generators":212,"cog/logger":68,"rtc-core/plugin":191}],214:[function(require,module,exports){
+/* jshint node: true */
+'use strict';
+
+var mbus = require('mbus');
+
+// define some state mappings to simplify the events we generate
+var stateMappings = {
+  completed: 'connected'
+};
+
+// define the events that we need to watch for peer connection
+// state changes
+var peerStateEvents = [
+  'signalingstatechange',
+  'iceconnectionstatechange',
+];
+
+/**
+  ### rtc-tools/monitor
+
+  ```
+  monitor(pc, targetId, signaller, parentBus) => mbus
+  ```
+
+  The monitor is a useful tool for determining the state of `pc` (an
+  `RTCPeerConnection`) instance in the context of your application. The
+  monitor uses both the `iceConnectionState` information of the peer
+  connection and also the various
+  [signaller events](https://github.com/rtc-io/rtc-signaller#signaller-events)
+  to determine when the connection has been `connected` and when it has
+  been `disconnected`.
+
+  A monitor created `mbus` is returned as the result of a
+  [couple](https://github.com/rtc-io/rtc#rtccouple) between a local peer
+  connection and it's remote counterpart.
+
+**/
+module.exports = function(pc, targetId, signaller, parentBus) {
+  var monitor = mbus('', parentBus);
+  var state;
+  var connectionState;
+  var signalingState;
+  var isClosed = false;
+
+  function checkState() {
+    var newConnectionState = pc.iceConnectionState;
+    var newState = getMappedState(newConnectionState);
+    var newSignalingState = pc.signalingState;
+
+    // flag the we had a state change
+    monitor('statechange', pc, newState);
+    monitor('connectionstatechange', pc, newConnectionState);
+
+    // if the active state has changed, then send the appopriate message
+    if (state !== newState) {
+      monitor(newState);
+      state = newState;
+    }
+
+    if (connectionState !== newConnectionState) {
+      monitor('connectionstate:' + newConnectionState);
+      connectionState = newConnectionState;
+    }
+
+    // As Firefox does not always support `onclose`, if the state is closed
+    // and we haven't already handled the close, do so now
+    if (newState === 'closed' && !isClosed) {
+      handleClose();
+    }
+
+    // Check the signalling state to see if it has also changed
+    if (signalingState !== newSignalingState) {
+      monitor('signalingchange', pc, newSignalingState, signalingState);
+      monitor('signaling:' + newSignalingState, pc, newSignalingState, signalingState);
+      signalingState = newSignalingState;
+    }
+  }
+
+  function handleClose() {
+    isClosed = true;
+    monitor('closed');
+  }
+
+  pc.onclose = handleClose;
+  peerStateEvents.forEach(function(evtName) {
+    pc['on' + evtName] = checkState;
+  });
+
+  monitor.close = function() {
+    pc.onclose = null;
+    peerStateEvents.forEach(function(evtName) {
+      pc['on' + evtName] = null;
+    });
+  };
+
+  monitor.checkState = checkState;
+
+  monitor.destroy = function() {
+    monitor.clear();
+  };
+
+  // if we haven't been provided a valid peer connection, abort
+  if (! pc) {
+    return monitor;
+  }
+
+  // determine the initial is active state
+  state = getMappedState(pc.iceConnectionState);
+
+  return monitor;
+};
+
+/* internal helpers */
+
+function getMappedState(state) {
+  return stateMappings[state] || state;
+}
+
+},{"mbus":130}],215:[function(require,module,exports){
 var debug = require('cog/logger')('rtc-validator');
 var rePrefix = /^(?:a=)?candidate:/;
 
