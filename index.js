@@ -25,6 +25,9 @@ function createConference() {
     // only start the conference when we have received 1 local stream
     expectedLocalStreams: 1,
 
+    // show rtc internal logs in js console
+    debug: true,
+
     // flag reactive, which allow us to be more flexible in chrome browsers
     // reactive: true,
 
@@ -54,12 +57,14 @@ function localVideo(qc, cfg) {
 }
 
 function removeRemoteVideos(id) {
+  console.log('call:ended called with :', id);
   qsa('[data-peer="' + id + '"]').forEach(function(el) {
     el.parentNode.removeChild(el);
   });
 }
 
 function renderRemote(id, stream) {
+  console.log('stream:added called with :', id, stream);
   kgo({ stream: stream })
   ('attach', [ 'stream' ], attach)
   ('render-remote', [ 'attach' ], function(el) {
