@@ -30,6 +30,9 @@ var config = require('./config.js');
 
 **/
 function createConference() {
+
+  console.log('createConference called');
+
   var conference = quickconnect(config.switchboard, {
     // we are going to let quickconnect autogenerate #room names if not
     // supplied, but we will announce in the "qcdemo" namespace
@@ -47,6 +50,8 @@ function createConference() {
     // use some standard free ice servers
     iceServers: require('freeice')()
   });
+
+  console.log('quickconnect insteance created : ', conference);
 
   conference
   .createDataChannel('chat')
