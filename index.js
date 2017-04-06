@@ -8,7 +8,7 @@ var kgo = require('kgo');
 var config = require('./config.js');
 
 /**
-  # demo-quickconnect
+  # demo-quickconnect for attendanywhere
 
   This is a demonstration of how
   [`rtc-quickconnect`](https://github.com/rtc-io/rtc-quickconnect) can be used
