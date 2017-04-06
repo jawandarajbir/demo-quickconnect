@@ -5,13 +5,14 @@
   "private": true,
   "version": "1.0.0",
   "dependencies": {
-    "bufferutil": "^1.2.1",
+    "bufferutil": "1.2.1",
     "classtweak": "^0.1.1",
     "fdom": "^1.2.0",
     "freeice": "^2.2.0",
     "kgo": "^4.0.1",
     "rtc-attach": "2.0.1",
     "rtc-capture": "1.0.2",
+    "rtc-quickconnect": "5.7.0",
     "utf-8-validate": "^1.2.1"
   },
   "scripts": {
@@ -42,7 +43,6 @@
     "cssrecipes-custom-media-queries": "^0.3.0",
     "cssrecipes-defaults": "^0.5.0",
     "cssrecipes-grid": "^1.0.0",
-    "cssrecipes-utils": "^0.6.0",
-    "rtc-quickconnect": "git+https://github.com/rtc-io/rtc-quickconnect.git#garbage-collection-improvements"
+    "cssrecipes-utils": "^0.6.0"
   }
 }
