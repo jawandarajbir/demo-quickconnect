@@ -5,6 +5,9 @@ This is a demonstration of how
 to create a simple video conferencing application.
 
 
+Call Demo Url
+http://aa-test-rtc-quickconnect-demo.azurewebsites.net
+
 
 ## License(s)
 
