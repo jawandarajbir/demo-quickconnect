@@ -6,7 +6,9 @@ to create a simple video conferencing application.
 
 
 Call Demo Url
-http://aa-test-rtc-quickconnect-demo.azurewebsites.net
+https://aa-test-rtc-quickconnect-demo.azurewebsites.net
+
+https://rtc-io.github.io/demo-quickconnect/#1802741268440302
 
 
 ## License(s)
