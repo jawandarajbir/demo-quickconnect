@@ -10,6 +10,7 @@
     "fdom": "^1.2.0",
     "freeice": "^2.2.0",
     "kgo": "^4.0.1",
+    "rm": "^0.1.8",
     "rtc-attach": "2.0.1",
     "rtc-capture": "1.0.2",
     "rtc-quickconnect": "5.8.0",
