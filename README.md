@@ -1,4 +1,4 @@
-# demo-quickconnect
+# Overview
 
 This is a demonstration of how
 [`rtc-quickconnect`](https://github.com/rtc-io/rtc-quickconnect) can be used
@@ -7,12 +7,16 @@ to create a simple video conferencing application.
 
 Call Demo Url
 
-https://aa-test-rtc-quickconnect-demo.azurewebsites.net
+- [aa-test-rtc-quickconnect-demo.azurewebsites.net](https://aa-test-rtc-quickconnect-demo.azurewebsites.net)
 
-https://rtc-io.github.io/demo-quickconnect/#1802741268440302
+- [rtc-io.github.io/demo-quickconnect](https://rtc-io.github.io/demo-quickconnect/)
+
+# Build app
+
+Run `npm run build` to build app
 
 
-## License(s)
+# License(s)
 
 ### ISC
 
