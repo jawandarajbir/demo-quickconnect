@@ -1,17 +1,21 @@
 <html>
-  <head>
-    <title>rtc.io rtc-quickconnect demo</title>
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <link rel="stylesheet" href="layout.css" />
-  </head>
-  <body>
+
+<head>
+  <title>rtc.io rtc-quickconnect demo</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="stylesheet" href="layout.css" />
+  <script src="https://webrtc.github.io/adapter/adapter-latest.js" type="javascript" />
+</head>
+
+<body>
   <div class="localvideo pin--r" id="l-video"></div>
-    <div class="r-Grid">
-      <div class="r-Grid-cell r-all--3of4 r-maxL--2of3 r-maxM--1of1">
-        <div id="r-video" class="container"></div>
-        <div id="l-video" class="container"></div>
-      </div>
+  <div class="r-Grid">
+    <div class="r-Grid-cell r-all--3of4 r-maxL--2of3 r-maxM--1of1">
+      <div id="r-video" class="container"></div>
+      <div id="l-video" class="container"></div>
     </div>
-    <script src="bundle.js"></script>
-  </body>
+  </div>
+  <script src="bundle.js"></script>
+</body>
+
 </html>
